@@ -22,14 +22,20 @@ class Path():
         self.pos = pos
 
     def SetKillNum(self):
-        for child in self.next:
-            child.SetKillNum()
-        current_kill = 1 if self.killPiece else 0
-        max_child = max([child.killNum for child in self.next]) if self.next else 0
-        self.killNum = current_kill + max_child
-        if self.next:
-            max_kill = max(child.killNum for child in self.next)
-            self.next = [child for child in self.next if child.killNum == max_kill]
+        stack = [(self, False)]
+        while stack:
+            node, visited = stack.pop()
+            if not visited:
+                stack.append((node, True))
+                for child in reversed(node.next):
+                    stack.append((child, False))
+            else:
+                currentKill = 1 if node.killPiece else 0
+                maxChild = max([child.killNum for child in node.next]) if node.next else 0
+                node.killNum = currentKill + maxChild
+                if node.next:
+                    maxKill = max(child.killNum for child in node.next)
+                    node.next = [child for child in node.next if child.killNum == maxKill]
 
     def GetNext(self) -> list:
         if len(self.next) == 0:
@@ -64,9 +70,12 @@ class ObjectPool():
 
     def Get(self):
         if self.index >= len(self.pool):
-            self.extra.append(self.obj())
+            newObj = self.obj()
+            newObj.Reset()
+            self.extra.append(newObj)
             return self.extra[self.index - len(self.pool)]
         obj = self.pool[self.index]
+        obj.Reset()
         self.index += 1
         return obj
 
@@ -116,7 +125,7 @@ class Piece():
             landCell = map_.GetCell(newPos)
             if not landCell:
                 pass
-            elif landCell.color == "blank":
+            elif landCell.color == "blank" or landCell == self:
                 newKilled = killedList + [cell]
                 path_ = map_.paths.Get()
                 path_.SetPos(newPos)
@@ -138,7 +147,7 @@ class Piece():
             landCell = map_.GetCell(newPos)
             if not landCell:
                 pass
-            elif landCell.color == "blank":
+            elif landCell.color == "blank" or landCell == self:
                 newKilled = killedList + [cell]
                 path_ = map_.paths.Get()
                 path_.SetPos(newPos)
@@ -157,19 +166,19 @@ class Piece():
             cell = map_.GetCell(newPos)
             if not cell:
                 break
-            elif cell.color == self.color:
+            elif cell.color == self.color or cell in killedList:
                 break
             elif cell.color == "blank":
                 path = map_.paths.Get()
                 path.SetPos(newPos)
                 path_s.append(path)
                 continue
-            elif not cell in killedList:
+            else:
                 newPos = (newPos[0] + dir_[0], newPos[1] + dir_[1])
                 landCell = map_.GetCell(newPos)
                 if not landCell:
                     break
-                elif landCell.color != "blank":
+                elif landCell.color != "blank" or landCell == self:
                     break
                 else:
                     newKilled = killedList + [cell]
@@ -184,28 +193,28 @@ class Piece():
         newPos = pos
         while True:
             path = map_.paths.Get()
-            path.SetPos(pos)
-            path.AddNext(self.__SideDirSearch(map_, dir_, pos, killedList))
+            path.SetPos(newPos)
+            path.AddNext(self.__SideDirSearch(map_, dir_, newPos, killedList))
             path_s.append(path)
             newPos = (newPos[0] + dir_[0], newPos[1] + dir_[1])
             cell = map_.GetCell(newPos)
             if not cell:
                 break
-            elif cell.color == "blank":
+            elif cell.color == "blank" or cell == self:
                 continue
-            elif cell.color == self.color:
+            elif cell.color == self.color or cell in killedList:
                 break
-            elif not cell in killedList:
+            else:
                 newPos = (newPos[0] + dir_[0], newPos[1] + dir_[1])
                 landCell = map_.GetCell(newPos)
                 if not landCell:
                     break
-                elif landCell.color == "blank":
+                elif landCell.color == "blank" or landCell == self:
                     newKilled = killedList + [cell]
-                    for path in path_s:
-                        path.SetKillPiece(cell)
                     laterPath = self.__MainDirSearch(map_, dir_, newPos, newKilled.copy())
                     if laterPath:
+                        for path in laterPath:
+                            path.SetKillPiece(cell)
                         for path in path_s:
                             path.AddNext(laterPath)
                     break
@@ -217,6 +226,7 @@ class Piece():
         path_s = []
         dir_s = [(-1, -1), (-1, 1), (1, -1), (1, 1)]
         for dir_2 in dir_s:
+            newPos = pos_
             if dir_2[0] * dir_2[1] == dir_[0] * dir_[1]:
                 continue
             while True:
@@ -224,16 +234,16 @@ class Piece():
                 cell = map_.GetCell(newPos)
                 if not cell:
                     break
-                elif cell.color == "blank":
+                elif cell.color == "blank" or cell == self:
                     continue
-                elif cell.color == self.color:
+                elif cell.color == self.color or cell in killedListBranch:
                     break
-                elif not cell in killedListBranch:
+                else:
                     newPos = (newPos[0] + dir_2[0], newPos[1] + dir_2[1])
                     landCell = map_.GetCell(newPos)
                     if not landCell:
                         break
-                    elif landCell.color != "blank":
+                    elif landCell.color != "blank" and landCell != self:
                         break
                     else:
                         killedListBranch.append(cell)
@@ -421,6 +431,7 @@ class Game():
 
     def PieceEditor(self, pos_, getPressed):
         pos = self.InputPos(pos_)
+        color = None
         if getPressed[0] and getPressed[2]:
             return
         if getPressed[0]:
@@ -431,7 +442,7 @@ class Game():
             color = "king"
         if pos in self.numMap.keys():
             cell = self.map.GetCell(pos)
-            if not cell:
+            if not (cell and color):
                 return
             if cell.color != "blank":
                 if color == "king":
@@ -456,6 +467,17 @@ class Game():
 
     def InputPos(self, inputPos) -> tuple:
         return (int((inputPos[1] - self.map.pos[1]) // self.cellSize + self.mapSize / 2), int((inputPos[0] - self.map.pos[0]) // self.cellSize + self.mapSize / 2))
+
+    def EnterEditorMode(self):
+        self.editModeBottom.Push()
+        self.availablePos = []
+        self.availablePaths = []
+
+        if not self.editModeBottom.IsActive():
+            self.players["white"].InitPieces(self.map)
+            self.players["black"].InitPieces(self.map)
+            self.players["white"].MovementCacheUpdate(self.map)
+            self.players["black"].MovementCacheUpdate(self.map)
 
     def JudgeMovment(self, pos_):
         pos = self.InputPos(pos_)
@@ -540,12 +562,7 @@ while True:
                 game.map.DefaultMapInitializer(game.Pos2Num)
 
             if game.editModeBottom.rect.collidepoint(event.pos):
-                game.editModeBottom.Push()
-                if not game.editModeBottom.IsActive():
-                    game.players["white"].InitPieces(game.map)
-                    game.players["black"].InitPieces(game.map)
-                    game.players["white"].MovementCacheUpdate(game.map)
-                    game.players["black"].MovementCacheUpdate(game.map)
+                game.EnterEditorMode()
 
             if game.editModeBottom.IsActive():
                 game.PieceEditor(pygame.mouse.get_pos(), pygame.mouse.get_pressed())
